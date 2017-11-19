@@ -160,35 +160,50 @@ def einsum(equation, *inputs, **kwargs):
   with ops.name_scope(name, "einsum", [equation, inputs]) as name:
     if '...' in equation:
       raise ValueError('Subscripts with ellipses are not yet supported.')
-
     match = re.match('([a-z,]+)(->[a-z]*)?', equation)
+    multiple_character_label = False
     if not match:
-      raise ValueError(
+      match = re.match('(((\([a-zA-Z0-9_\-]+\))+)|,)+(->)(((\([a-z0-9]+\))+))?',equation)
+      multiple_character_label = True
+      if not match:
+        raise ValueError(
           'Indices have incorrect format: %s' % equation
       )
 
     inputs = list(inputs)
-    input_axis_labels = match.group(1).split(',')
 
-    if len(inputs) != len(input_axis_labels):
-      raise ValueError('Got %d arguments for equation "%s", expecting %d' % (
-          len(inputs), equation, len(input_axis_labels)))
+    if multiple_character_label:
+      split_eq = equation.split('->')
+      if len(split_eq) > 0:
+        input_elements = split_eq[0].split(',')
+        input_axis_labels = [element[1:-1].split(')(') for element in input_elements]
+      axis_labels = set([item for sublist in input_axis_labels for item in sublist])
 
-    axis_labels = set(''.join(input_axis_labels))
-    if match.group(2):
-      output_axis_labels = match.group(2)[2:]
+      if len(split_eq) == 2:
+        output_axis_labels = split_eq[1][1:-1].split(')(')
+      else:
+        raise NotImplementedError("Inferring for multiple character labels is not implemented.")
     else:
-      # infer the output subscripts if not given, assume alphabetical order
-      indices = ''.join(sorted(axis_labels))
-      counts = {ax: 0 for ax in indices}
-      for axes_ in input_axis_labels:
-        for ax in axes_:
-          counts[ax] += 1
+      input_axis_labels = [list(s) for s in match.group(1).split(',')]
+      if len(inputs) != len(input_axis_labels):
+        raise ValueError('Got %d arguments for equation "%s", expecting %d' % (
+            len(inputs), equation, len(input_axis_labels)))
 
-      output_axis_labels = ''.join(sorted(
-          ax for ax in indices
-          if counts[ax] == 1
-      ))
+      axis_labels = set([item for sublist in input_axis_labels for item in sublist])
+      if match.group(2):
+        output_axis_labels = list(match.group(2)[2:])
+      else:
+        # infer the output subscripts if not given, assume alphabetical order
+        indices = sorted(axis_labels)
+        counts = {ax: 0 for ax in indices}
+        for axes_ in input_axis_labels:
+          for ax in axes_:
+            counts[ax] += 1
+
+        output_axis_labels = ''.join(sorted(
+            ax for ax in indices
+            if counts[ax] == 1
+        ))
 
     for a in axis_labels:
       input_count = sum(1 for s in input_axis_labels if a in s)
@@ -209,14 +224,16 @@ def einsum(equation, *inputs, **kwargs):
                                                  input_axis_labels[i+1],
                                                  axes_to_sum)
 
+    # difference here is that tensorflow treats indices as a string
+    # we treat them as a set. Fine, but we just need to cope with it.
+
     missing_indices = set(temp_axis_labels) - set(output_axis_labels)
     if missing_indices:
       reduction_indices = [i for i, a in enumerate(temp_axis_labels)
                            if a not in output_axis_labels]
       temp = math_ops.reduce_sum(temp, reduction_indices=reduction_indices)
-      temp_axis_labels = ''.join(a for a in temp_axis_labels
-                                 if a in output_axis_labels)
-
+      temp_axis_labels = [a for a in temp_axis_labels
+                                 if a in output_axis_labels]
     if sorted(temp_axis_labels) != sorted(output_axis_labels):
       raise ValueError('Invalid equation: %s' % equation)
 
@@ -251,13 +268,9 @@ def _einsum_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
       `t1_axis_labels`.
   """
   if len(t0_axis_labels) != len(t0.get_shape()):
-    raise ValueError(
-        'Tensor t0 of rank %d does not match einsum reduction of length %d' %
-        (len(t0.get_shape()), len(t0_axis_labels)))
+    raise ValueError()
   if len(t1_axis_labels) != len(t1.get_shape()):
-    raise ValueError(
-        'Tensor t1 of rank %d does not match einsum reduction of length %d' %
-        (len(t1.get_shape()), len(t1_axis_labels)))
+    raise ValueError()
 
   # This function computes the result of a two-argument einsum() using batch
   # matrix multiplication.  This involves
@@ -296,8 +309,9 @@ def _einsum_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
   sorted_axes = [sorted(sym_list, key=lambda a: sort_key(i, a))
                  for i, sym_list in enumerate(axis_labels)]
   inputs = [t0, t1]
-  for i, axes_str in enumerate(axis_labels):
-    perm = [axes_str.find(a) for a in sorted_axes[i]]
+  for i, axes_list in enumerate(axis_labels):
+    #perm = [axes_str.find(a) for a in sorted_axes[i]]
+    perm = [axes_list.index(a) for a in sorted_axes[i]]
     inputs[i] = _transpose_if_necessary(inputs[i], perm)
   t0, t1 = inputs
 
@@ -310,7 +324,8 @@ def _einsum_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
       t1 = array_ops.expand_dims(t1, len(preserved_axes))
     product = math_ops.multiply(t0, t1)
     product_axes = sorted_axes[0] + sorted_axes[1][len(preserved_axes):]
-    return product, ''.join(product_axes)
+    #return product, ''.join(product_axes)
+    return product, product_axes
   else:
     # Reduce to matmul().
 
@@ -347,7 +362,8 @@ def _einsum_reduction(t0, t0_axis_labels, t1, t1_axis_labels, axes_to_sum):
         sorted_axes[1][len(sorted_axes[1])-len(broadcast_axes[1]):]
     )
 
-    return product, ''.join(product_axes)
+    return product, product_axes
+    #return product, ''.join(product_axes)
 
 
 def _transpose_if_necessary(tensor, perm):
@@ -410,7 +426,8 @@ def _exponential_space_einsum(equation, *inputs):
   inputs = list(inputs)
   idx_in = match.group(1).split(',')
   idx_all = set(''.join(idx_in))
-  indices = ''.join(sorted(idx_all))
+  #indices = ''.join(sorted(idx_all))
+  indices = sorted(idx_all)
 
   if match.group(2):
     idx_out = match.group(2)[2:]
@@ -422,10 +439,10 @@ def _exponential_space_einsum(equation, *inputs):
       for ax in axes_:
         counts[ax] += 1
 
-    idx_out = ''.join(sorted(
+    idx_out = sorted(
         ax for ax in indices
         if counts[ax] == 1
-    ))
+    )
 
   if len(idx_in) != len(inputs):
     raise ValueError(
