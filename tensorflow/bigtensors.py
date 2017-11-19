@@ -5,8 +5,9 @@ import sys
 # Let us now demonstrate our ability to manipulate tensors with more than 26 legs. 
 # Please pass whichever dimension you want as the first argument to this script.
 # But beware, dimensions bigger than 20 or so take a while :)
-
 test_dim = int(sys.argv[1])
+
+sess = tf.Session()
 array2 = np.arange(2**test_dim).reshape([2 for i in range(test_dim)])
 d = tf.constant(array2)
 
