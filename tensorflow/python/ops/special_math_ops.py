@@ -200,10 +200,10 @@ def einsum(equation, *inputs, **kwargs):
           for ax in axes_:
             counts[ax] += 1
 
-        output_axis_labels = ''.join(sorted(
+        output_axis_labels = sorted(
             ax for ax in indices
             if counts[ax] == 1
-        ))
+        )
 
     for a in axis_labels:
       input_count = sum(1 for s in input_axis_labels if a in s)
@@ -211,7 +211,8 @@ def einsum(equation, *inputs, **kwargs):
         logging.warn(
             'Falling back to exponential-space implementation of einsum() because'
             ' index "%s" is summed over more than two inputs.', a)
-        return _exponential_space_einsum(equation, *inputs)
+        #return _exponential_space_einsum(equation, *inputs)
+        return _exponential_space_einsum(input_axis_labels, output_axis_labels, *inputs)
 
     temp = inputs[0]
     temp_axis_labels = input_axis_labels[0]
@@ -412,37 +413,12 @@ def _total_size(shape_values):
   return result
 
 
-def _exponential_space_einsum(equation, *inputs):
+def _exponential_space_einsum(idx_in, idx_out, *inputs):
   """Fallback implementation that supports summing an index over > 2 inputs."""
-  if '...' in equation:
-    raise ValueError("Subscripts with ellipses are not yet supported.")
-
-  match = re.match('([a-z,]+)(->[a-z]*)?', equation)
-  if not match:
-    raise ValueError(
-        'Indices have incorrect format: %s' % equation
-    )
 
   inputs = list(inputs)
-  idx_in = match.group(1).split(',')
-  idx_all = set(''.join(idx_in))
-  #indices = ''.join(sorted(idx_all))
+  idx_all = set().union(*[set(idxes) for idxes in idx_in])
   indices = sorted(idx_all)
-
-  if match.group(2):
-    idx_out = match.group(2)[2:]
-
-  else:
-    # infer the output subscripts if not given, assume alphabetical order
-    counts = {ax: 0 for ax in indices}
-    for axes_ in idx_in:
-      for ax in axes_:
-        counts[ax] += 1
-
-    idx_out = sorted(
-        ax for ax in indices
-        if counts[ax] == 1
-    )
 
   if len(idx_in) != len(inputs):
     raise ValueError(
@@ -480,7 +456,7 @@ def _exponential_space_einsum(equation, *inputs):
       )
 
     if list(axes_) != sorted_idx:
-      permuted = [axes_.find(ax) for ax in sorted_idx]
+      permuted = [axes_.index(ax) for ax in sorted_idx]
       inputs[i] = array_ops.transpose(input_, permuted)
       idx_in[i] = sorted_idx
 
